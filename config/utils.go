@@ -129,6 +129,9 @@ func SetBeaconConfigDefaults(c *ExtensionConfig) {
 }
 
 func SetAviConfigDefaults(c *ExtensionConfig) {
+	if c.AviControllerPort == "" {
+		c.AviControllerPort = "9443"
+	}
 	if c.SSLServerVerify == "" {
 		c.SSLServerVerify = "required"
 	}

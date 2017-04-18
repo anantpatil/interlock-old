@@ -1,6 +1,8 @@
 package avi
 
 import (
+	"strings"
+
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
@@ -13,8 +15,22 @@ const (
 )
 
 type AviLoadBalancer struct {
-	cfg    *config.ExtensionConfig
-	client *client.Client
+	cfg        *config.ExtensionConfig
+	client     *client.Client
+	aviSession *AviSession
+}
+
+func initAviSession(host string, port string, username string, password string, sslVerify string) (*AviSession, error) {
+	insecure := false
+	sslVerify = strings.ToLower(sslVerify)
+	if sslVerify == "no" || sslVerify == "false" {
+		insecure = true
+	}
+
+	netloc := host + ":" + port // 10.0.1.4:9443 typish
+	aviSession := NewAviSession(netloc, username, password, insecure)
+	err := aviSession.InitiateSession()
+	return aviSession, err
 }
 
 func log() *logrus.Entry {
@@ -24,12 +40,19 @@ func log() *logrus.Entry {
 }
 
 func NewAviLoadBalancer(c *config.ExtensionConfig, cl *client.Client) (*AviLoadBalancer, error) {
+	aviSession, err := initAviSession(c.AviControllerAddr,
+		c.AviControllerPort,
+		c.AviUser,
+		c.AviPassword,
+		c.SSLServerVerify)
+
 	lb := &AviLoadBalancer{
-		cfg:    c,
-		client: cl,
+		cfg:        c,
+		client:     cl, // docker client
+		aviSession: aviSession,
 	}
 
-	return lb, nil
+	return lb, err
 }
 
 func (p *AviLoadBalancer) Name() string {

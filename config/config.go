@@ -52,7 +52,7 @@ type ExtensionConfig struct {
 	StatsInfluxDBPrecision        string           // beacon (influxdb)
 	Rules                         map[string]*Rule // beacon FIXME: this isn't loaded properly from toml; we set it as a hack now
 
-	Aviuser           string // Avi user
+	AviUser           string // Avi user
 	AviPassword       string // Avi password
 	AviControllerAddr string // Avi controller IP address
 	AviControllerPort string // Avi controller Port
