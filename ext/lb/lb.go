@@ -19,6 +19,7 @@ import (
 	ntypes "github.com/docker/engine-api/types/network"
 	"github.com/ehazlett/interlock/config"
 	"github.com/ehazlett/interlock/ext"
+	"github.com/ehazlett/interlock/ext/lb/avi"
 	"github.com/ehazlett/interlock/ext/lb/generic"
 	"github.com/ehazlett/interlock/ext/lb/haproxy"
 	"github.com/ehazlett/interlock/ext/lb/nginx"
@@ -142,6 +143,12 @@ func NewLoadBalancer(c *config.ExtensionConfig, client *client.Client) (*LoadBal
 		extension.backend = p
 	case "generic":
 		p, err := generic.NewGenericLoadBalancer(c, client)
+		if err != nil {
+			return nil, fmt.Errorf("error setting backend: %s", err)
+		}
+		extension.backend = p
+	case "avi":
+		p, err := avi.NewAviLoadBalancer(c, client)
 		if err != nil {
 			return nil, fmt.Errorf("error setting backend: %s", err)
 		}

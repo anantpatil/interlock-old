@@ -127,3 +127,9 @@ func SetBeaconConfigDefaults(c *ExtensionConfig) {
 		c.StatsInfluxDBPrecision = "s"
 	}
 }
+
+func SetAviConfigDefaults(c *ExtensionConfig) {
+	if c.SSLServerVerify == "" {
+		c.SSLServerVerify = "required"
+	}
+}
