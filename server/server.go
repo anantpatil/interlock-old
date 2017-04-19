@@ -212,7 +212,7 @@ func (s *Server) loadExtensions(client *client.Client) {
 	for _, x := range s.cfg.Extensions {
 		log.Debugf("loading extension: name=%s", x.Name)
 		switch strings.ToLower(x.Name) {
-		case "haproxy", "nginx", "generic":
+		case "haproxy", "nginx", "generic", "avi":
 			p, err := lb.NewLoadBalancer(x, client)
 			if err != nil {
 				log.Errorf("error loading load balancer extension: %s", err)

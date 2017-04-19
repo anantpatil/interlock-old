@@ -103,6 +103,7 @@ func NewAviSession(host string, username string, password string, insecure bool)
 }
 
 func (avisession *AviSession) InitiateSession() error {
+	log().Debug("Initiating session %s, %s, %s", avisession.prefix, avisession.username, avisession.insecure)
 	if avisession.insecure == true {
 		log().Warn("Strict certificate verification is *DISABLED*")
 	}

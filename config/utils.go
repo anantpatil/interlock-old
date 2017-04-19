@@ -43,6 +43,8 @@ func SetConfigDefaults(c *ExtensionConfig) error {
 		SetNginxConfigDefaults(c)
 	case "beacon":
 		SetBeaconConfigDefaults(c)
+	case "avi":
+		SetAviConfigDefaults(c)
 	default:
 		log.Debugf("unknown extension %q; not loading config defaults", c.Name)
 	}
