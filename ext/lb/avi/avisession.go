@@ -122,6 +122,7 @@ func (avisession *AviSession) InitiateSession() error {
 	log().Debug("response: ", res)
 	if res != nil && reflect.TypeOf(res).Kind() != reflect.String {
 		log().Debug("results: ", res.(map[string]interface{}), " error: ", rerror)
+		//log().Debug("results: ", res.([]uint8), " error: ", rerror)
 	}
 
 	return nil

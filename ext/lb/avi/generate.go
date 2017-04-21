@@ -11,7 +11,7 @@ var cache map[string]types.Container
 var retain map[string]types.Container
 var mutex = &sync.Mutex{}
 
-func (p *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (interface{}, error) {
+func (lb *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (interface{}, error) {
 	mutex.Lock()
 	if cache == nil {
 		cache = make(map[string]types.Container)
@@ -28,13 +28,13 @@ func (p *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (int
 		if servicename == "" {
 			continue
 		}
-		if p.processEvent(true, cnt) {
+		if lb.processEvent(true, cnt) {
 			retain[cnt.ID] = cnt
 		}
 	}
 
 	for _, cnt := range cache {
-		p.processEvent(false, cnt)
+		lb.processEvent(false, cnt)
 	}
 
 	cache = retain

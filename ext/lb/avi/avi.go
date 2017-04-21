@@ -62,59 +62,85 @@ func NewAviLoadBalancer(c *config.ExtensionConfig, cl *client.Client) (*AviLoadB
 	return lb, err
 }
 
-func (p *AviLoadBalancer) Name() string {
+func (lb *AviLoadBalancer) Name() string {
 	return pluginName
 }
 
-func (p *AviLoadBalancer) processEvent(add bool, cnt types.Container) bool {
-	servicename := hostname(cnt)
+func (lb *AviLoadBalancer) taskAdd(serviceName string, ip string, portType string, publicPort int) error {
+	log().Infof("ADD new task for service %s with (%s, %s/%d)", serviceName, ip, portType, publicPort)
+	// TODO
+	return nil
+}
+
+func (lb *AviLoadBalancer) taskDelete(serviceName string, ip string, portType string, publicPort int) error {
+	log().Infof("DELETE task for service %s with (%s, %s/%d)", serviceName, ip, portType, publicPort)
+	// TODO
+	return nil
+}
+
+func (lb *AviLoadBalancer) serviceAdd(serviceName string, cnt types.Container) error {
+	log().Infof("ADD VS :  %s", serviceName)
+	// TODO
+	return nil
+}
+
+func (lb *AviLoadBalancer) serviceDelete(serviceName string, cnt types.Container) error {
+	log().Infof("DELETE VS :  %s", serviceName)
+	// TODO
+	return nil
+}
+
+func (lb *AviLoadBalancer) processEvent(add bool, cnt types.Container) bool {
+	serviceName := hostname(cnt)
 	retain := false
 	for _, p := range cnt.Ports {
 		if p.PublicPort == 0 || net.ParseIP(p.IP).IsUnspecified() {
 			continue
 		}
 		retain = true
-		op := "DELETE"
 		if add {
-			op = "POST"
-			if _, ok := srvcache[servicename]; !ok {
-				srvcache[servicename] = make(map[string]types.Container)
-				// CRUD operation to create a new service
-				log().Infof("POST new service :  %s", servicename)
+			// task/cnt was added; check if new service
+			if _, ok := srvcache[serviceName]; !ok {
+				srvcache[serviceName] = make(map[string]types.Container)
+				// Create a new service
+				lb.serviceAdd(serviceName, cnt)
 			}
-			srvcache[servicename][cnt.ID] = cnt
+			lb.taskAdd(serviceName, p.IP, p.Type, p.PublicPort)
+			srvcache[serviceName][cnt.ID] = cnt
+		} else {
+			// task/cnt was deleted
+			lb.taskDelete(serviceName, p.IP, p.Type, p.PublicPort)
+			delete(srvcache[serviceName], cnt.ID)
 		}
-
-		// CRUD operation to add or delete a backend for a service
-		log().Infof("%s operation on a Task for service %s with (%s, %s/%d)", op, servicename, p.IP, p.Type, p.PublicPort)
 	}
 	if !add {
-		delete(srvcache[servicename], cnt.ID)
-		if len(srvcache[servicename]) == 0 {
-			// CRUD operation to delete a service
-			log().Infof("DELETE service :  %s", servicename)
-			delete(srvcache, servicename)
+		// task/cnt was deleted; check if service deleted
+		if len(srvcache[serviceName]) == 0 {
+			//Delete the service
+			lb.serviceDelete(serviceName, cnt)
+			delete(srvcache, serviceName)
 		}
 	}
+
 	return retain
 }
 
-func (p *AviLoadBalancer) HandleEvent(event *etypes.Message) error {
+func (lb *AviLoadBalancer) HandleEvent(event *etypes.Message) error {
 	return nil
 }
 
-func (p *AviLoadBalancer) ConfigPath() string {
+func (lb *AviLoadBalancer) ConfigPath() string {
 	return ""
 }
 
-func (p *AviLoadBalancer) Template() string {
+func (lb *AviLoadBalancer) Template() string {
 	return ""
 }
 
-func (p *AviLoadBalancer) NeedsReload() bool {
+func (lb *AviLoadBalancer) NeedsReload() bool {
 	return false
 }
 
-func (p *AviLoadBalancer) Reload(proxyContainers []types.Container) error {
+func (lb *AviLoadBalancer) Reload(proxyContainers []types.Container) error {
 	return nil
 }
