@@ -224,6 +224,10 @@ func (lb *AviLoadBalancer) GetResourceByName(resource, objname string) (map[stri
 
 func (lb *AviLoadBalancer) EnsurePoolExists(poolName string) (map[string]interface{}, error) {
 	exists, resp, err := lb.CheckPoolExists(poolName)
+	if exists {
+		log().Infof("Pool %s already exists", poolName)
+	}
+
 	if exists || err != nil {
 		return resp, err
 	}
@@ -261,7 +265,7 @@ func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, delete
 		ipAddr := ip["addr"].(string)
 		port := strconv.FormatInt(int64(server["port"].(float64)), 10)
 		key := makeKey(ipAddr, port)
-		if _, ok := deletedTasks[key]; !ok {
+		if _, ok := deletedTasks[key]; ok {
 			// this is deleted
 			log().Debugf("Deleting pool member with key %s", key)
 		} else {
@@ -404,10 +408,10 @@ func (vs *VS) Create(tasks DockerTasks) error {
 		return err
 	}
 
-	ssl_app := false
+	sslApp := false
 	if vs.appProfileType == APP_PROFILE_HTTPS {
 		// add certificate
-		ssl_app = true
+		sslApp = true
 		err := vs.lb.AddCertificate()
 		if err != nil {
 			return err
@@ -417,21 +421,17 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	pvs, err := vs.lb.GetVS(vs.name)
 
 	// TODO: Get the certs from Avi; remove following line
-	ssl_cert := make(map[string]interface{})
+	sslCert := make(map[string]interface{})
 	// for now, just mock an empty ref
-	ssl_cert["url"] = ""
+	sslCert["url"] = ""
+	// certName := ""
 
-	certName := ""
 	if err == nil {
 		// VS exists, check port etc
-		service_port := int(pvs["services"].([]interface{})[0].(map[string]interface{})["port"].(float64))
-		if ssl_app &&
-			service_port == 443 &&
-			pvs["ssl_key_and_certificate_refs"].([]interface{})[0].(string) == ssl_cert["url"].(string) {
-			log().Infof("VS already exists %s", certName)
-			return nil
-		}
-		if !ssl_app && service_port == 80 {
+		servicePort := int(pvs["services"].([]interface{})[0].(map[string]interface{})["port"].(float64))
+		if (sslApp && servicePort == 443) ||
+			(!sslApp && servicePort == 80) {
+			log().Infof("VS already exists %s", vs.name)
 			return nil
 		}
 
@@ -458,7 +458,7 @@ func (vs *VS) Create(tasks DockerTasks) error {
 
 	// TODO: For now, no ssl termination. Only enable ssl if port is
 	// 443
-	// if ssl_app {
+	// if sslApp {
 	// jsonstr += `
 	// "ssl_key_and_certificate_refs":[
 	// "%s"
@@ -477,12 +477,12 @@ func (vs *VS) Create(tasks DockerTasks) error {
 
 	//TODO: when supporting ssl termination; fix following which is
 	// mocked above
-	ssl_cert_ref := ssl_cert["url"]
-	if ssl_app {
+	sslCertRef := sslCert["url"]
+	if sslApp {
 		jsonstr = fmt.Sprintf(jsonstr,
 			vs.lb.cfg.AviCloudName,
 			appProfile["url"], vs.name, fqdn,
-			nwRefUrl, pool["url"], ssl_cert_ref, "443", "true")
+			nwRefUrl, pool["url"], sslCertRef, "443", "true")
 	} else {
 		jsonstr = fmt.Sprintf(jsonstr,
 			vs.lb.cfg.AviCloudName,
@@ -494,7 +494,6 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	json.Unmarshal([]byte(jsonstr), &newVS)
 	log().Debugf("Sending request to create VS %s", vs.name)
 	log().Debugf("DATA: %s", jsonstr)
-	// log().Debugf("DATA LENGTH: %s", len(newVS))
 	nres, err := vs.lb.aviSession.Post("api/macro", newVS)
 	if err != nil {
 		log().Infof("Failed creating VS: %s", vs.name)

@@ -59,7 +59,7 @@ type ExtensionConfig struct {
 	AviTenant         string // Avi tenant, optional
 	AviCloudName      string // Avi Cloud, defaults to Default-Cloud
 	// TODO: when network is chosen, subnet is also required
-	AviIPAMNetwork  string // IPAM network to auto allocate IP for VS
+	// AviIPAMNetwork  string // IPAM network to auto allocate IP for VS
 	AviDNSSubdomain string // Subdomain to assign domain name to app
 }
 

@@ -143,7 +143,8 @@ func SetAviConfigDefaults(c *ExtensionConfig) {
 		c.AviCloudName = "Default-Cloud"
 	}
 
-	if c.AviIPAMNetwork == "" {
-		c.AviIPAMNetwork = ""
-	}
+	// TODO: When a nw is chosen, subnet also needs to be
+	// if c.AviIPAMNetwork == "" {
+	// c.AviIPAMNetwork = ""
+	// }
 }

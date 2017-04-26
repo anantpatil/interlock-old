@@ -1,0 +1,20 @@
+ListenAddr    = ":8080"
+DockerURL     = "tcp://10.140.6.25:2376"
+TLSCACert     = "/home/johnny/ucp-certs/ca.pem"
+TLSCert       = "/home/johnny/ucp-certs/cert.pem"
+TLSKey        = "/home/johnny/ucp-certs/key.pem"
+AllowInsecure = false
+EnableMetrics = true
+PollInterval  = "10s"
+
+[[Extensions]]
+  Name                = "avi"
+  AviUser             = "admin"
+  AviPassword         = "Avi*1234"
+  # AviControllerAddr = "os2avi.westus.cloudapp.azure.com"
+  AviControllerAddr   = "10.140.6.35"
+  AviControllerPort   = "443"
+  SSLServerVerify     = "false"
+  AviCloudName        = ""
+  AviDNSSubdomain     = "avi.test"
+  # AviIPAMNetwork      = "NSNw" # not supported
