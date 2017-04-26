@@ -84,7 +84,7 @@ var vsJson = `{
 	 "auto_allocate_ip": true,
          "name":"%s",
          "fqdn": "%s",
-	 "network_ref": %s,
+	 "network_ref": "%s",
          "pool_ref":"%s",`
 
 func formVSName(serviceName string) string {
@@ -115,7 +115,7 @@ func formPoolName(serviceName string, tasks DockerTasks) string {
 // return strings.Join(tokens, sep)
 // }
 
-func GetVS(serviceName string) (*VS, bool) {
+func GetVSFromCache(serviceName string) (*VS, bool) {
 	vsName := formVSName(serviceName)
 
 	lock.Lock()
@@ -171,10 +171,10 @@ func VSFromTask(serviceName string, tasks DockerTasks, lb *AviLoadBalancer) (*VS
 }
 
 // checks if pool exists: returns the pool, else some error
-func (lb *AviLoadBalancer) CheckPoolExists(poolname string) (bool, map[string]interface{}, error) {
+func (lb *AviLoadBalancer) CheckPoolExists(poolName string) (bool, map[string]interface{}, error) {
 	var resp map[string]interface{}
 
-	cresp, err := lb.aviSession.GetCollection("/api/pool?name=" + poolname)
+	cresp, err := lb.aviSession.GetCollection("/api/pool?name=" + poolName)
 	if err != nil {
 		log().Infof("Avi PoolExists check failed: %v", cresp)
 		return false, resp, err
@@ -222,13 +222,13 @@ func (lb *AviLoadBalancer) GetResourceByName(resource, objname string) (map[stri
 	return nres.(map[string]interface{}), nil
 }
 
-func (lb *AviLoadBalancer) EnsurePoolExists(poolname string) (map[string]interface{}, error) {
-	exists, resp, err := lb.CheckPoolExists(poolname)
+func (lb *AviLoadBalancer) EnsurePoolExists(poolName string) (map[string]interface{}, error) {
+	exists, resp, err := lb.CheckPoolExists(poolName)
 	if exists || err != nil {
 		return resp, err
 	}
 
-	return lb.CreatePool(poolname)
+	return lb.CreatePool(poolName)
 }
 
 func getPoolMembers(pool interface{}) []map[string]interface{} {
@@ -253,23 +253,31 @@ func getPoolMembers(pool interface{}) []map[string]interface{} {
 }
 
 func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, deletedTasks DockerTasks) error {
+	poolName := pool["name"].(string)
 	currMembers := getPoolMembers(pool)
 	retained := make([]interface{}, 0)
 	for _, server := range currMembers {
 		ip := server["ip"].(map[string]interface{})
-		key := makeKey(ip["addr"].(string), server["port"].(string))
+		ipAddr := ip["addr"].(string)
+		port := strconv.FormatInt(int64(server["port"].(float64)), 10)
+		key := makeKey(ipAddr, port)
 		if _, ok := deletedTasks[key]; !ok {
 			// this is deleted
-			log().Debug("Deleting pool member with key %s", key)
+			log().Debugf("Deleting pool member with key %s", key)
 		} else {
 			retained = append(retained, server)
 		}
 	}
 
-	pool_uuid := pool["uuid"].(string)
+	if len(currMembers) == len(retained) {
+		log().Infof("Given members don't exist in pool %s; nothing to remove from pool", poolName)
+		return nil
+	}
+
+	poolUuid := pool["uuid"].(string)
 	pool["servers"] = retained
-	log().Debug("pool after assignment: %s", pool)
-	res, err := lb.aviSession.Put("/api/pool/"+pool_uuid, pool)
+	log().Debugf("pool after assignment: %s", pool)
+	res, err := lb.aviSession.Put("/api/pool/"+poolUuid, pool)
 	if err != nil {
 		log().Infof("Avi update Pool failed: %v", res)
 		return err
@@ -280,8 +288,25 @@ func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, delete
 
 func (lb *AviLoadBalancer) AddPoolMembers(pool map[string]interface{}, addedTasks DockerTasks) error {
 	// add new server to pool
-	pool_uuid := pool["uuid"].(string)
+	poolName := pool["name"].(string)
+	poolUuid := pool["uuid"].(string)
 	currMembers := getPoolMembers(pool)
+	for _, member := range currMembers {
+		port := strconv.FormatInt(int64(member["port"].(float64)), 10)
+		ip := member["ip"].(map[string]interface{})
+		ipAddr := ip["addr"].(string)
+		key := makeKey(ipAddr, port)
+		if _, ok := addedTasks[key]; ok {
+			// already exists; remove
+			delete(addedTasks, key)
+		}
+	}
+
+	if len(addedTasks) == 0 {
+		log().Infof("Pool %s has all intended members, no new member to be added.", poolName)
+		return nil
+	}
+
 	for _, dt := range addedTasks {
 		server := make(map[string]interface{})
 		ip := make(map[string]interface{})
@@ -290,12 +315,12 @@ func (lb *AviLoadBalancer) AddPoolMembers(pool map[string]interface{}, addedTask
 		server["ip"] = ip
 		server["port"] = dt.publicPort
 		currMembers = append(currMembers, server)
-		log().Debug("currMembers in loop: %s", currMembers)
+		log().Debugf("currMembers in loop: %s", currMembers)
 	}
 
 	pool["servers"] = currMembers
-	log().Debug("pool after assignment: %s", pool)
-	res, err := lb.aviSession.Put("/api/pool/"+pool_uuid, pool)
+	log().Debugf("pool after assignment: %s", pool)
+	res, err := lb.aviSession.Put("/api/pool/"+poolUuid, pool)
 	if err != nil {
 		log().Infof("Avi update Pool failed: %v", res)
 		return err
@@ -305,17 +330,17 @@ func (lb *AviLoadBalancer) AddPoolMembers(pool map[string]interface{}, addedTask
 }
 
 // deletePool delete the named pool from Avi.
-func (lb *AviLoadBalancer) DeletePool(poolname string) error {
-	exists, pool, err := lb.CheckPoolExists(poolname)
+func (lb *AviLoadBalancer) DeletePool(poolName string) error {
+	exists, pool, err := lb.CheckPoolExists(poolName)
 	if err != nil || !exists {
 		log().Infof("pool does not exist or can't obtain!: %v", pool)
 		return err
 	}
-	pool_uuid := pool["uuid"].(string)
+	poolUuid := pool["uuid"].(string)
 
-	res, err := lb.aviSession.Delete("/api/pool/" + pool_uuid)
+	res, err := lb.aviSession.Delete("/api/pool/" + poolUuid)
 	if err != nil {
-		log().Infof("Error deleting pool %s: %v", poolname, res)
+		log().Infof("Error deleting pool %s: %v", poolName, res)
 		return err
 	}
 
@@ -367,13 +392,13 @@ func (lb *AviLoadBalancer) AddCertificate() error {
 }
 
 func (vs *VS) Create(tasks DockerTasks) error {
-	log().Debug("Creating pool %s for VS %s", vs.pool.name, vs.name)
+	log().Debugf("Creating pool %s for VS %s", vs.pool.name, vs.name)
 	pool, err := vs.lb.EnsurePoolExists(vs.pool.name)
 	if err != nil {
 		return err
 	}
 
-	log().Debug("Updating pool %s with members", vs.pool.name)
+	log().Debugf("Updating pool %s with members", vs.pool.name)
 	err = vs.lb.AddPoolMembers(pool, tasks)
 	if err != nil {
 		return err
@@ -390,8 +415,12 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	}
 
 	pvs, err := vs.lb.GetVS(vs.name)
+
 	// TODO: Get the certs from Avi; remove following line
 	ssl_cert := make(map[string]interface{})
+	// for now, just mock an empty ref
+	ssl_cert["url"] = ""
+
 	certName := ""
 	if err == nil {
 		// VS exists, check port etc
@@ -415,22 +444,26 @@ func (vs *VS) Create(tasks DockerTasks) error {
 		return err
 	}
 
+	// TODO: if you give networ, it asks for subnet. Fix later.
 	nwRefUrl := ""
-	if vs.lb.cfg.AviIPAMNetwork != "" {
-		nwRef, err := vs.lb.GetResourceByName("networkprofile", vs.lb.cfg.AviIPAMNetwork)
-		if err != nil {
-			return err
-		}
-		nwRefUrl = nwRef["url"].(string)
-	}
+	// if vs.lb.cfg.AviIPAMNetwork != "" {
+	// nwRef, err := vs.lb.GetResourceByName("network", vs.lb.cfg.AviIPAMNetwork)
+	// if err != nil {
+	// return err
+	// }
+	// nwRefUrl = nwRef["url"].(string)
+	//}
 
 	jsonstr := vsJson
-	if ssl_app {
-		jsonstr += `
-         "ssl_key_and_certificate_refs":[
-           "%s"
-         ],`
-	}
+
+	// TODO: For now, no ssl termination. Only enable ssl if port is
+	// 443
+	// if ssl_app {
+	// jsonstr += `
+	// "ssl_key_and_certificate_refs":[
+	// "%s"
+	// ],`
+	// }
 
 	jsonstr += `
          "services": [{"port": %s, "enable_ssl": %s}]
@@ -442,11 +475,14 @@ func (vs *VS) Create(tasks DockerTasks) error {
 		fqdn = fqdn + "." + vs.lb.cfg.AviDNSSubdomain
 	}
 
+	//TODO: when supporting ssl termination; fix following which is
+	// mocked above
+	ssl_cert_ref := ssl_cert["url"]
 	if ssl_app {
 		jsonstr = fmt.Sprintf(jsonstr,
 			vs.lb.cfg.AviCloudName,
 			appProfile["url"], vs.name, fqdn,
-			nwRefUrl, pool["url"], ssl_cert["url"], "443", "true")
+			nwRefUrl, pool["url"], ssl_cert_ref, "443", "true")
 	} else {
 		jsonstr = fmt.Sprintf(jsonstr,
 			vs.lb.cfg.AviCloudName,
@@ -456,23 +492,23 @@ func (vs *VS) Create(tasks DockerTasks) error {
 
 	var newVS interface{}
 	json.Unmarshal([]byte(jsonstr), &newVS)
-	log().Debug("Sending request to create VS %s", vs.name)
+	log().Debugf("Sending request to create VS %s", vs.name)
+	log().Debugf("DATA: %s", jsonstr)
+	// log().Debugf("DATA LENGTH: %s", len(newVS))
 	nres, err := vs.lb.aviSession.Post("api/macro", newVS)
 	if err != nil {
-		log().Info("Failed creating VS: %s", vs.name)
+		log().Infof("Failed creating VS: %s", vs.name)
 		return err
 	}
 
-	log().Debug("Created VS %s, response: %s", vs.name, nres)
+	log().Debugf("Created VS %s, response: %s", vs.name, nres)
 	return nil
 }
 
 func (vs *VS) Delete() error {
-	// assume all members from pool are already deleted
-	vs.lb.DeletePool(vs.pool.name)
 	pvs, err := vs.lb.GetVS(vs.name)
 	if err != nil {
-		log().Warn("Cloudn't retreive VS %s; error: %s", vs.name, err)
+		log().Warnf("Cloudn't retreive VS %s; error: %s", vs.name, err)
 		return err
 	}
 
@@ -482,11 +518,19 @@ func (vs *VS) Delete() error {
 
 	iresp, err := vs.lb.aviSession.Delete("/api/virtualservice/" + pvs["uuid"].(string))
 	if err != nil {
-		log().Warn("Cloudn't delete VS %s; error: %s", vs.name, err)
+		log().Warnf("Cloudn't delete VS %s; error: %s", vs.name, err)
 		return err
 	}
 
 	log().Infof("VS delete response %s", iresp)
+
+	// now delete the pool
+	err = vs.lb.DeletePool(vs.pool.name)
+	if err != nil {
+		log().Warnf("Cloudn't delete pool %s; error: %s", vs.pool.name, err)
+		return err
+	}
+
 	return nil
 }
 
@@ -496,6 +540,7 @@ func (vs *VS) AddPoolMember(tasks DockerTasks) error {
 		return err
 	}
 	if !exists {
+		log().Warnf("Pool %s doesn't exist", vs.pool.name)
 		return nil
 	}
 

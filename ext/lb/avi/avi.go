@@ -41,6 +41,10 @@ func (dt *DockerTask) Key() string {
 // taskKey -> DockerTask
 type DockerTasks map[string]*DockerTask
 
+func NewDockerTasks() DockerTasks {
+	return make(DockerTasks)
+}
+
 // serviceName -> (taskKey -> DockerTask)
 type serviceCache map[string]DockerTasks
 
@@ -114,9 +118,9 @@ func (lb *AviLoadBalancer) Name() string {
 }
 
 func (lb *AviLoadBalancer) addTasks(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVS(serviceName)
+	vs, isExisting := GetVSFromCache(serviceName)
 	if !isExisting {
-		log().Warn("VS doesn't exist for task %s", serviceName)
+		log().Warnf("VS doesn't exist for task %s", serviceName)
 		return
 	}
 
@@ -126,14 +130,14 @@ func (lb *AviLoadBalancer) addTasks(serviceName string, tasks DockerTasks) {
 	}
 
 	if err := vs.AddPoolMember(tasks); err != nil {
-		log().Warn("Failed to add pool members to VS %s; error %s", vs.name, err)
+		log().Warnf("Failed to add pool members to VS %s; error %s", vs.name, err)
 	}
 }
 
 func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVS(serviceName)
+	vs, isExisting := GetVSFromCache(serviceName)
 	if !isExisting {
-		log().Warn("VS doesn't exist for task %s", serviceName)
+		log().Warnf("VS doesn't exist for task %s", serviceName)
 		return
 	}
 	for _, task := range tasks {
@@ -142,29 +146,29 @@ func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks DockerTasks) {
 	}
 
 	if err := vs.RemovePoolMember(tasks); err != nil {
-		log().Warn("Failed to remove pool members from VS %s; error %s", vs.name, err)
+		log().Warnf("Failed to remove pool members from VS %s; error %s", vs.name, err)
 	}
 }
 
 func (lb *AviLoadBalancer) CreateNewVS(serviceName string, tasks DockerTasks) {
 	vs, isExisting := VSFromTask(serviceName, tasks, lb)
 	if isExisting {
-		log().Warn("VS %s already exists", vs.name)
+		log().Warnf("VS %s already exists", vs.name)
 		return
 	}
 
 	log().Infof("CREATING VS: %s", vs.name)
 	if err := vs.Create(tasks); err != nil {
-		log().Warn("Failed to create VS %s; error %s", vs.name, err)
+		log().Warnf("Failed to create VS %s; error %s", vs.name, err)
 	}
 }
 
 func (lb *AviLoadBalancer) DeleteVS(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVS(serviceName)
+	vs, isExisting := GetVSFromCache(serviceName)
 	if isExisting {
 		log().Infof("DELETING VS: %s", vs.name)
 		if err := vs.Delete(); err != nil {
-			log().Warn("Failed to delete VS %s; error: %s", vs.name, err)
+			log().Warnf("Failed to delete VS %s; error: %s", vs.name, err)
 		}
 	}
 }
@@ -194,10 +198,16 @@ func (lb *AviLoadBalancer) processEvent(add bool, cnt types.Container, cc *curre
 				// mark service as added
 				cc.services[serviceName] = true
 			}
+			if _, ok := cc.tasksAdded[serviceName]; !ok {
+				cc.tasksAdded[serviceName] = NewDockerTasks()
+			}
 			cc.tasksAdded[serviceName][dt.Key()] = dt
 			srvcache[serviceName][cnt.ID] = cnt
 		} else {
 			// task/cnt was deleted
+			if _, ok := cc.tasksDeleted[serviceName]; !ok {
+				cc.tasksDeleted[serviceName] = NewDockerTasks()
+			}
 			cc.tasksDeleted[serviceName][dt.Key()] = dt
 			delete(srvcache[serviceName], cnt.ID)
 		}
