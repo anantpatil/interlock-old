@@ -57,6 +57,9 @@ type ExtensionConfig struct {
 	AviControllerAddr string // Avi controller IP address
 	AviControllerPort string // Avi controller Port
 	AviTenant         string // Avi tenant, optional
+	AviCloudName      string // Avi Cloud, defaults to Default-Cloud
+	AviIPAMNetwork    string // IPAM network to auto allocate IP for VS
+	AviDNSSubdomain   string // Subdomain to assign domain name to app
 }
 
 // Config is the top level configuration

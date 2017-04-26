@@ -110,19 +110,22 @@ func (avisession *AviSession) InitiateSession() error {
 
 	// initiate http session here
 	// first set the csrf token
-	res, rerror := avisession.Get("")
+	res, _ := avisession.Get("")
 
 	// now login to get session_id
 	cred := make(map[string]string)
 	cred["username"] = avisession.username
 	cred["password"] = avisession.password
-	res, rerror = avisession.Post("login", cred)
+	res, rerror := avisession.Post("login", cred)
+	if rerror != nil {
+		log().Warn("Unable to initiate HTTP(S) session with Avi: ", rerror)
+		return rerror
+	}
 	// now session id is set too
 
 	log().Debug("response: ", res)
 	if res != nil && reflect.TypeOf(res).Kind() != reflect.String {
 		log().Debug("results: ", res.(map[string]interface{}), " error: ", rerror)
-		//log().Debug("results: ", res.([]uint8), " error: ", rerror)
 	}
 
 	return nil

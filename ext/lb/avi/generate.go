@@ -13,6 +13,7 @@ var mutex = &sync.Mutex{}
 
 func (lb *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (interface{}, error) {
 	mutex.Lock()
+	cc := NewCurrentConfig()
 	if cache == nil {
 		cache = make(map[string]types.Container)
 	}
@@ -28,18 +29,22 @@ func (lb *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (in
 		if servicename == "" {
 			continue
 		}
-		if lb.processEvent(true, cnt) {
+		if lb.processEvent(true, cnt, cc) {
 			retain[cnt.ID] = cnt
 		}
 	}
 
 	for _, cnt := range cache {
-		lb.processEvent(false, cnt)
+		lb.processEvent(false, cnt, cc)
 	}
 
 	cache = retain
 
 	mutex.Unlock()
+
+	// converge to current configuration
+	go lb.Converge(cc)
+
 	return nil, nil
 }
 

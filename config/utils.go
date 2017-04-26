@@ -138,4 +138,12 @@ func SetAviConfigDefaults(c *ExtensionConfig) {
 	if c.SSLServerVerify == "" {
 		c.SSLServerVerify = "required"
 	}
+
+	if c.AviCloudName == "" {
+		c.AviCloudName = "Default-Cloud"
+	}
+
+	if c.AviIPAMNetwork == "" {
+		c.AviIPAMNetwork = ""
+	}
 }
