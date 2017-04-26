@@ -24,21 +24,11 @@ func (val ErrDuplicateVS) String() string {
 	return fmt.Sprintf("ErrDuplicateVS(%v)", string(val))
 }
 
-type PoolMember struct {
-	ip   string
-	port int
-}
-
-type Pool struct {
-	name    string
-	members []PoolMember
-}
-
 type VS struct {
 	name           string
+	poolName       string
 	appProfileType string
-	pool           *Pool
-	lb             *AviLoadBalancer
+	sslEnabled     bool
 }
 
 var vsCache map[string]*VS
@@ -91,7 +81,7 @@ func formVSName(serviceName string) string {
 	return serviceName + "-docker-ucp"
 }
 
-func formPoolName(serviceName string, tasks DockerTasks) string {
+func formPoolName(serviceName string, tasks dockerTasks) string {
 	// currently, each public exposed port + host ip is a pool member
 	// for now assume only one port is mapped either 443 or 80 or
 	// something else
@@ -115,23 +105,15 @@ func formPoolName(serviceName string, tasks DockerTasks) string {
 // return strings.Join(tokens, sep)
 // }
 
-func GetVSFromCache(serviceName string) (*VS, bool) {
-	vsName := formVSName(serviceName)
-
-	lock.Lock()
-	defer lock.Unlock()
-
-	vs, ok := vsCache[vsName]
-	return vs, ok
-}
-
-func getAppProfileType(tasks DockerTasks) string {
+func getAppProfileType(tasks dockerTasks) (string, bool) {
 	// if one of the exposed ports is for 443, then use https
 	// profile, if 80, then http other wise tcp
 	appProfile := APP_PROFILE_TCP
+	sslEnabled := false
 	for _, dt := range tasks {
 		if dt.privatePort == 443 {
 			appProfile = APP_PROFILE_HTTPS
+			sslEnabled = true
 			break
 		}
 		if dt.privatePort == 80 {
@@ -139,11 +121,24 @@ func getAppProfileType(tasks DockerTasks) string {
 		}
 	}
 
-	return appProfile
+	return appProfile, sslEnabled
 }
 
-// form a new VS given a docker task
-func VSFromTask(serviceName string, tasks DockerTasks, lb *AviLoadBalancer) (*VS, bool) {
+func CheckVS(serviceName string) (*VS, bool) {
+	lock.Lock()
+	defer lock.Unlock()
+
+	if vsCache == nil {
+		return nil, false
+	}
+
+	vsName := formVSName(serviceName)
+	vs, ok := vsCache[vsName]
+	return vs, ok
+}
+
+// create a new VS if doesn't exists in cache
+func NewVS(serviceName string, tasks dockerTasks) (*VS, bool) {
 	// tasks contain publicly exposed port from each container on each
 	// host for a service
 	// currently, each public exposed port + host ip is a pool member
@@ -161,10 +156,9 @@ func VSFromTask(serviceName string, tasks DockerTasks, lb *AviLoadBalancer) (*VS
 	} else {
 		// create an empty pool
 		poolName := formPoolName(serviceName, tasks)
-		pool := &Pool{poolName, []PoolMember{}}
 		// create VS with empty pool
-		appProfileType := getAppProfileType(tasks)
-		vs := &VS{vsName, appProfileType, pool, lb}
+		appProfileType, sslEnabled := getAppProfileType(tasks)
+		vs := &VS{vsName, poolName, appProfileType, sslEnabled}
 		vsCache[vsName] = vs
 		return vs, false
 	}
@@ -256,7 +250,7 @@ func getPoolMembers(pool interface{}) []map[string]interface{} {
 	return servers
 }
 
-func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, deletedTasks DockerTasks) error {
+func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, deletedTasks dockerTasks) error {
 	poolName := pool["name"].(string)
 	currMembers := getPoolMembers(pool)
 	retained := make([]interface{}, 0)
@@ -290,7 +284,7 @@ func (lb *AviLoadBalancer) RemovePoolMembers(pool map[string]interface{}, delete
 	return nil
 }
 
-func (lb *AviLoadBalancer) AddPoolMembers(pool map[string]interface{}, addedTasks DockerTasks) error {
+func (lb *AviLoadBalancer) AddPoolMembers(pool map[string]interface{}, addedTasks dockerTasks) error {
 	// add new server to pool
 	poolName := pool["name"].(string)
 	poolUuid := pool["uuid"].(string)
@@ -395,30 +389,28 @@ func (lb *AviLoadBalancer) AddCertificate() error {
 	return nil
 }
 
-func (vs *VS) Create(tasks DockerTasks) error {
-	log().Debugf("Creating pool %s for VS %s", vs.pool.name, vs.name)
-	pool, err := vs.lb.EnsurePoolExists(vs.pool.name)
+func (lb *AviLoadBalancer) Create(vs *VS, tasks dockerTasks) error {
+	log().Debugf("Creating pool %s for VS %s", vs.poolName, vs.name)
+	pool, err := lb.EnsurePoolExists(vs.poolName)
 	if err != nil {
 		return err
 	}
 
-	log().Debugf("Updating pool %s with members", vs.pool.name)
-	err = vs.lb.AddPoolMembers(pool, tasks)
+	log().Debugf("Updating pool %s with members", vs.poolName)
+	err = lb.AddPoolMembers(pool, tasks)
 	if err != nil {
 		return err
 	}
 
-	sslApp := false
-	if vs.appProfileType == APP_PROFILE_HTTPS {
+	if vs.sslEnabled {
 		// add certificate
-		sslApp = true
-		err := vs.lb.AddCertificate()
+		err := lb.AddCertificate()
 		if err != nil {
 			return err
 		}
 	}
 
-	pvs, err := vs.lb.GetVS(vs.name)
+	pvs, err := lb.GetVS(vs.name)
 
 	// TODO: Get the certs from Avi; remove following line
 	sslCert := make(map[string]interface{})
@@ -429,8 +421,8 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	if err == nil {
 		// VS exists, check port etc
 		servicePort := int(pvs["services"].([]interface{})[0].(map[string]interface{})["port"].(float64))
-		if (sslApp && servicePort == 443) ||
-			(!sslApp && servicePort == 80) {
+		if (vs.sslEnabled && servicePort == 443) ||
+			(!vs.sslEnabled && servicePort == 80) {
 			log().Infof("VS already exists %s", vs.name)
 			return nil
 		}
@@ -439,15 +431,15 @@ func (vs *VS) Create(tasks DockerTasks) error {
 		return ErrDuplicateVS(vs.name)
 	}
 
-	appProfile, err := vs.lb.GetResourceByName("applicationprofile", vs.appProfileType)
+	appProfile, err := lb.GetResourceByName("applicationprofile", vs.appProfileType)
 	if err != nil {
 		return err
 	}
 
 	// TODO: if you give networ, it asks for subnet. Fix later.
 	nwRefUrl := ""
-	// if vs.lb.cfg.AviIPAMNetwork != "" {
-	// nwRef, err := vs.lb.GetResourceByName("network", vs.lb.cfg.AviIPAMNetwork)
+	// if lb.cfg.AviIPAMNetwork != "" {
+	// nwRef, err := lb.GetResourceByName("network", lb.cfg.AviIPAMNetwork)
 	// if err != nil {
 	// return err
 	// }
@@ -458,7 +450,7 @@ func (vs *VS) Create(tasks DockerTasks) error {
 
 	// TODO: For now, no ssl termination. Only enable ssl if port is
 	// 443
-	// if sslApp {
+	// if vs.sslEnabled {
 	// jsonstr += `
 	// "ssl_key_and_certificate_refs":[
 	// "%s"
@@ -471,21 +463,21 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	}`
 
 	fqdn := vs.name
-	if vs.lb.cfg.AviDNSSubdomain != "" {
-		fqdn = fqdn + "." + vs.lb.cfg.AviDNSSubdomain
+	if lb.cfg.AviDNSSubdomain != "" {
+		fqdn = fqdn + "." + lb.cfg.AviDNSSubdomain
 	}
 
 	//TODO: when supporting ssl termination; fix following which is
 	// mocked above
 	sslCertRef := sslCert["url"]
-	if sslApp {
+	if vs.sslEnabled {
 		jsonstr = fmt.Sprintf(jsonstr,
-			vs.lb.cfg.AviCloudName,
+			lb.cfg.AviCloudName,
 			appProfile["url"], vs.name, fqdn,
 			nwRefUrl, pool["url"], sslCertRef, "443", "true")
 	} else {
 		jsonstr = fmt.Sprintf(jsonstr,
-			vs.lb.cfg.AviCloudName,
+			lb.cfg.AviCloudName,
 			appProfile["url"], vs.name, fqdn,
 			nwRefUrl, pool["url"], "80", "false")
 	}
@@ -494,7 +486,7 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	json.Unmarshal([]byte(jsonstr), &newVS)
 	log().Debugf("Sending request to create VS %s", vs.name)
 	log().Debugf("DATA: %s", jsonstr)
-	nres, err := vs.lb.aviSession.Post("api/macro", newVS)
+	nres, err := lb.aviSession.Post("api/macro", newVS)
 	if err != nil {
 		log().Infof("Failed creating VS: %s", vs.name)
 		return err
@@ -504,8 +496,8 @@ func (vs *VS) Create(tasks DockerTasks) error {
 	return nil
 }
 
-func (vs *VS) Delete() error {
-	pvs, err := vs.lb.GetVS(vs.name)
+func (lb *AviLoadBalancer) Delete(vs *VS) error {
+	pvs, err := lb.GetVS(vs.name)
 	if err != nil {
 		log().Warnf("Cloudn't retreive VS %s; error: %s", vs.name, err)
 		return err
@@ -515,7 +507,7 @@ func (vs *VS) Delete() error {
 		return nil
 	}
 
-	iresp, err := vs.lb.aviSession.Delete("/api/virtualservice/" + pvs["uuid"].(string))
+	iresp, err := lb.aviSession.Delete("/api/virtualservice/" + pvs["uuid"].(string))
 	if err != nil {
 		log().Warnf("Cloudn't delete VS %s; error: %s", vs.name, err)
 		return err
@@ -524,30 +516,30 @@ func (vs *VS) Delete() error {
 	log().Infof("VS delete response %s", iresp)
 
 	// now delete the pool
-	err = vs.lb.DeletePool(vs.pool.name)
+	err = lb.DeletePool(vs.poolName)
 	if err != nil {
-		log().Warnf("Cloudn't delete pool %s; error: %s", vs.pool.name, err)
+		log().Warnf("Cloudn't delete pool %s; error: %s", vs.poolName, err)
 		return err
 	}
 
 	return nil
 }
 
-func (vs *VS) AddPoolMember(tasks DockerTasks) error {
-	exists, pool, err := vs.lb.CheckPoolExists(vs.pool.name)
+func (lb *AviLoadBalancer) AddPoolMember(vs *VS, tasks dockerTasks) error {
+	exists, pool, err := lb.CheckPoolExists(vs.poolName)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		log().Warnf("Pool %s doesn't exist", vs.pool.name)
+		log().Warnf("Pool %s doesn't exist", vs.poolName)
 		return nil
 	}
 
-	return vs.lb.AddPoolMembers(pool, tasks)
+	return lb.AddPoolMembers(pool, tasks)
 }
 
-func (vs *VS) RemovePoolMember(tasks DockerTasks) error {
-	exists, pool, err := vs.lb.CheckPoolExists(vs.pool.name)
+func (lb *AviLoadBalancer) RemovePoolMember(vs *VS, tasks dockerTasks) error {
+	exists, pool, err := lb.CheckPoolExists(vs.poolName)
 	if err != nil {
 		return err
 	}
@@ -555,5 +547,5 @@ func (vs *VS) RemovePoolMember(tasks DockerTasks) error {
 		return nil
 	}
 
-	return vs.lb.RemovePoolMembers(pool, tasks)
+	return lb.RemovePoolMembers(pool, tasks)
 }

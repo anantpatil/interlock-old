@@ -17,7 +17,7 @@ const (
 )
 
 // task maps to pool member in Avi
-type DockerTask struct {
+type dockerTask struct {
 	serviceName string
 	portType    string // tcp/udp
 	ipAddr      string // host IP Address hosting container
@@ -25,8 +25,8 @@ type DockerTask struct {
 	privatePort int    // publicly exposed port
 }
 
-func NewDockerTask(serviceName string, portType string, ipAddr string, publicPort int, privatePort int) *DockerTask {
-	return &DockerTask{serviceName, portType, ipAddr, publicPort, privatePort}
+func NewDockerTask(serviceName string, portType string, ipAddr string, publicPort int, privatePort int) *dockerTask {
+	return &dockerTask{serviceName, portType, ipAddr, publicPort, privatePort}
 }
 
 func makeKey(ipAddr string, port string) string {
@@ -34,28 +34,28 @@ func makeKey(ipAddr string, port string) string {
 	return strings.Join([]string{ipAddr, port}, sep)
 }
 
-func (dt *DockerTask) Key() string {
+func (dt *dockerTask) Key() string {
 	return makeKey(dt.ipAddr, strconv.Itoa(dt.publicPort))
 }
 
-// taskKey -> DockerTask
-type DockerTasks map[string]*DockerTask
+// taskKey -> dockerTask
+type dockerTasks map[string]*dockerTask
 
-func NewDockerTasks() DockerTasks {
-	return make(DockerTasks)
+func NewDockerTasks() dockerTasks {
+	return make(dockerTasks)
 }
 
-// serviceName -> (taskKey -> DockerTask)
-type serviceCache map[string]DockerTasks
+// serviceName -> (taskKey -> dockerTask)
+type serviceCache map[string]dockerTasks
 
 func NewServiceCache() serviceCache {
-	return make(map[string]DockerTasks)
+	return make(map[string]dockerTasks)
 }
 
 type currentConfig struct {
 	services     map[string]bool // services added or deleted
 	tasksAdded   serviceCache    // tasks added
-	tasksDeleted serviceCache    //tasks deleted
+	tasksDeleted serviceCache    // tasks deleted
 }
 
 func NewCurrentConfig() *currentConfig {
@@ -117,67 +117,67 @@ func (lb *AviLoadBalancer) Name() string {
 	return pluginName
 }
 
-func (lb *AviLoadBalancer) addTasks(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVSFromCache(serviceName)
+func (lb *AviLoadBalancer) addTasks(serviceName string, tasks dockerTasks) {
+	vs, isExisting := CheckVS(serviceName)
 	if !isExisting {
 		log().Warnf("VS doesn't exist for task %s", serviceName)
 		return
 	}
 
 	for _, task := range tasks {
-		log().Infof("ADD new task for service %s with (%s, %s/%d)",
-			vs.name, task.ipAddr, task.portType, task.publicPort)
+		log().Infof("ADD new task for service %s with (%s, %s/[%d -> %d])",
+			vs.name, task.ipAddr, task.portType, task.privatePort, task.publicPort)
 	}
 
-	if err := vs.AddPoolMember(tasks); err != nil {
+	if err := lb.AddPoolMember(vs, tasks); err != nil {
 		log().Warnf("Failed to add pool members to VS %s; error %s", vs.name, err)
 	}
 }
 
-func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVSFromCache(serviceName)
+func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks dockerTasks) {
+	vs, isExisting := CheckVS(serviceName)
 	if !isExisting {
 		log().Warnf("VS doesn't exist for task %s", serviceName)
 		return
 	}
 	for _, task := range tasks {
-		log().Infof("DELETE task for service %s with (%s, %s/%d)",
-			vs.name, task.ipAddr, task.portType, task.publicPort)
+		log().Infof("DELETE task for service %s with (%s, %s/[%d -> %d])",
+			vs.name, task.ipAddr, task.portType, task.privatePort, task.publicPort)
 	}
 
-	if err := vs.RemovePoolMember(tasks); err != nil {
+	if err := lb.RemovePoolMember(vs, tasks); err != nil {
 		log().Warnf("Failed to remove pool members from VS %s; error %s", vs.name, err)
 	}
 }
 
-func (lb *AviLoadBalancer) CreateNewVS(serviceName string, tasks DockerTasks) {
-	vs, isExisting := VSFromTask(serviceName, tasks, lb)
+func (lb *AviLoadBalancer) CreateNewVS(serviceName string, tasks dockerTasks) {
+	vs, isExisting := NewVS(serviceName, tasks)
 	if isExisting {
 		log().Warnf("VS %s already exists", vs.name)
 		return
 	}
 
 	log().Infof("CREATING VS: %s", vs.name)
-	if err := vs.Create(tasks); err != nil {
+	if err := lb.Create(vs, tasks); err != nil {
 		log().Warnf("Failed to create VS %s; error %s", vs.name, err)
 	}
 }
 
-func (lb *AviLoadBalancer) DeleteVS(serviceName string, tasks DockerTasks) {
-	vs, isExisting := GetVSFromCache(serviceName)
+func (lb *AviLoadBalancer) DeleteVS(serviceName string, tasks dockerTasks) {
+	vs, isExisting := CheckVS(serviceName)
 	if isExisting {
 		log().Infof("DELETING VS: %s", vs.name)
-		if err := vs.Delete(); err != nil {
+		if err := lb.Delete(vs); err != nil {
 			log().Warnf("Failed to delete VS %s; error: %s", vs.name, err)
 		}
 	}
 }
 
-func (lb *AviLoadBalancer) addService(serviceName string, tasks DockerTasks) {
+func (lb *AviLoadBalancer) addService(serviceName string, tasks dockerTasks) {
 	lb.CreateNewVS(serviceName, tasks)
 }
 
-func (lb *AviLoadBalancer) deleteService(serviceName string, tasks DockerTasks) {
+func (lb *AviLoadBalancer) deleteService(serviceName string, tasks dockerTasks) {
 	lb.DeleteVS(serviceName, tasks)
 }
 
