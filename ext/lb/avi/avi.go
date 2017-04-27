@@ -16,6 +16,8 @@ const (
 	pluginName = "avi"
 )
 
+var srvcache map[string]map[string]types.Container
+
 // task maps to pool member in Avi
 type dockerTask struct {
 	serviceName string
@@ -46,24 +48,24 @@ func NewDockerTasks() dockerTasks {
 }
 
 // serviceName -> (taskKey -> dockerTask)
-type serviceCache map[string]dockerTasks
+type tasksCache map[string]dockerTasks
 
-func NewServiceCache() serviceCache {
+func NewTaskCache() tasksCache {
 	return make(map[string]dockerTasks)
 }
 
 type currentConfig struct {
 	services     map[string]bool // services added or deleted
-	tasksAdded   serviceCache    // tasks added
-	tasksDeleted serviceCache    // tasks deleted
+	tasksAdded   tasksCache      // tasks added
+	tasksDeleted tasksCache      // tasks deleted
 }
 
 func NewCurrentConfig() *currentConfig {
 	services := make(map[string]bool)
-	cntsAdded := NewServiceCache()
-	cntsDeleted := NewServiceCache()
+	tasksAdded := NewTaskCache()
+	tasksDeleted := NewTaskCache()
 
-	return &currentConfig{services, cntsAdded, cntsDeleted}
+	return &currentConfig{services, tasksAdded, tasksDeleted}
 }
 
 type AviLoadBalancer struct {
@@ -71,8 +73,6 @@ type AviLoadBalancer struct {
 	client     *client.Client
 	aviSession *AviSession
 }
-
-var srvcache map[string]map[string]types.Container
 
 func initAviSession(host string, port string, username string, password string, sslVerify string) (*AviSession, error) {
 	insecure := false
@@ -129,9 +129,7 @@ func (lb *AviLoadBalancer) addTasks(serviceName string, tasks dockerTasks) {
 			vs.name, task.ipAddr, task.portType, task.privatePort, task.publicPort)
 	}
 
-	if err := lb.AddPoolMember(vs, tasks); err != nil {
-		log().Warnf("Failed to add pool members to VS %s; error %s", vs.name, err)
-	}
+	vs.jobsChan <- vsJob{tasks, true}
 }
 
 func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks dockerTasks) {
@@ -145,40 +143,60 @@ func (lb *AviLoadBalancer) deleteTasks(serviceName string, tasks dockerTasks) {
 			vs.name, task.ipAddr, task.portType, task.privatePort, task.publicPort)
 	}
 
-	if err := lb.RemovePoolMember(vs, tasks); err != nil {
-		log().Warnf("Failed to remove pool members from VS %s; error %s", vs.name, err)
-	}
+	vs.jobsChan <- vsJob{tasks, false}
 }
 
-func (lb *AviLoadBalancer) CreateNewVS(serviceName string, tasks dockerTasks) {
-	vs, isExisting := NewVS(serviceName, tasks)
-	if isExisting {
-		log().Warnf("VS %s already exists", vs.name)
-		return
-	}
-
+func (lb *AviLoadBalancer) CreateNewVS(vs *VS, tasks dockerTasks) {
 	log().Infof("CREATING VS: %s", vs.name)
 	if err := lb.Create(vs, tasks); err != nil {
 		log().Warnf("Failed to create VS %s; error %s", vs.name, err)
+		// remove from cache
+		delete(vsCache, vs.name)
+		return
 	}
-}
 
-func (lb *AviLoadBalancer) DeleteVS(serviceName string, tasks dockerTasks) {
-	vs, isExisting := CheckVS(serviceName)
-	if isExisting {
-		log().Infof("DELETING VS: %s", vs.name)
-		if err := lb.Delete(vs); err != nil {
-			log().Warnf("Failed to delete VS %s; error: %s", vs.name, err)
+	// check for pool member CRUD operations
+	for vsJob := range vs.jobsChan {
+		// add pool members
+		if vsJob.added {
+			if err := lb.AddPoolMember(vs, vsJob.tasks); err != nil {
+				log().Warnf("Failed to add pool members to VS %s; error %s", vs.name, err)
+			}
+		} else {
+			if err := lb.RemovePoolMember(vs, vsJob.tasks); err != nil {
+				log().Warnf("Failed to remove pool members from VS %s; error %s", vs.name, err)
+			}
 		}
 	}
 }
 
-func (lb *AviLoadBalancer) addService(serviceName string, tasks dockerTasks) {
-	lb.CreateNewVS(serviceName, tasks)
+func (lb *AviLoadBalancer) DeleteVS(vs *VS) {
+	log().Infof("DELETING VS: %s", vs.name)
+	if err := lb.Delete(vs); err != nil {
+		log().Warnf("Failed to delete VS %s; error: %s", vs.name, err)
+	}
 }
 
-func (lb *AviLoadBalancer) deleteService(serviceName string, tasks dockerTasks) {
-	lb.DeleteVS(serviceName, tasks)
+func (lb *AviLoadBalancer) addService(serviceName string, tasks dockerTasks) {
+	if vs, isExisting := CheckVS(serviceName); isExisting {
+		log().Warnf("VS %s already exists", vs.name)
+		return
+	}
+	vsName := formVSName(serviceName)
+	vs := NewVS(vsName, serviceName, lb.cfg.AviDNSSubdomain, tasks)
+	vsCache[vsName] = vs
+
+	go lb.CreateNewVS(vs, tasks)
+}
+
+func (lb *AviLoadBalancer) deleteService(serviceName string) {
+	if vs, isExisting := CheckVS(serviceName); isExisting {
+		delete(vsCache, vs.name)
+		close(vs.jobsChan)
+		go lb.DeleteVS(vs)
+	} else {
+		log().Infof("Error deleting VS; VS for %s doesn't exist.", serviceName)
+	}
 }
 
 func (lb *AviLoadBalancer) processEvent(add bool, cnt types.Container, cc *currentConfig) bool {
@@ -251,11 +269,11 @@ func (lb *AviLoadBalancer) Converge(cc *currentConfig) {
 		if added {
 			tasksAdded := cc.tasksAdded[serviceName]
 			delete(cc.tasksAdded, serviceName)
-			go lb.addService(serviceName, tasksAdded)
+			lb.addService(serviceName, tasksAdded)
 		} else {
-			tasksDeleted := cc.tasksDeleted[serviceName]
+			// tasksDeleted := cc.tasksDeleted[serviceName]
 			delete(cc.tasksDeleted, serviceName)
-			go lb.deleteService(serviceName, tasksDeleted)
+			lb.deleteService(serviceName)
 		}
 	}
 

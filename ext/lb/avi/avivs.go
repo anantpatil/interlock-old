@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 const (
@@ -24,15 +23,26 @@ func (val ErrDuplicateVS) String() string {
 	return fmt.Sprintf("ErrDuplicateVS(%v)", string(val))
 }
 
+type vsJob struct {
+	tasks dockerTasks
+	added bool
+}
+
 type VS struct {
 	name           string
 	poolName       string
 	appProfileType string
 	sslEnabled     bool
+	fqdn           string
+
+	// once a VS is created, pool members CRUD operations are sent
+	// on this channel.
+	jobsChan chan (vsJob)
 }
 
+// Caution: It is assumed that the calls on this cache are serialized by
+// design.
 var vsCache map[string]*VS
-var lock = &sync.Mutex{}
 
 var vsJson = `{
        "uri_path":"/api/virtualservice",
@@ -125,43 +135,40 @@ func getAppProfileType(tasks dockerTasks) (string, bool) {
 }
 
 func CheckVS(serviceName string) (*VS, bool) {
-	lock.Lock()
-	defer lock.Unlock()
-
 	if vsCache == nil {
 		return nil, false
 	}
-
 	vsName := formVSName(serviceName)
 	vs, ok := vsCache[vsName]
 	return vs, ok
 }
 
 // create a new VS if doesn't exists in cache
-func NewVS(serviceName string, tasks dockerTasks) (*VS, bool) {
+func NewVS(vsName string, serviceName string, subDomain string, tasks dockerTasks) *VS {
 	// tasks contain publicly exposed port from each container on each
 	// host for a service
 	// currently, each public exposed port + host ip is a pool member
-	lock.Lock()
-	defer lock.Unlock()
-
-	vsName := formVSName(serviceName)
-
 	if vsCache == nil {
 		vsCache = make(map[string]*VS)
 	}
 
-	if vs, ok := vsCache[vsName]; ok {
-		return vs, true
-	} else {
-		// create an empty pool
-		poolName := formPoolName(serviceName, tasks)
-		// create VS with empty pool
-		appProfileType, sslEnabled := getAppProfileType(tasks)
-		vs := &VS{vsName, poolName, appProfileType, sslEnabled}
-		vsCache[vsName] = vs
-		return vs, false
+	// create an empty pool
+	poolName := formPoolName(serviceName, tasks)
+	fqdn := serviceName
+	if len(subDomain) > 0 {
+		fqdn += "." + subDomain
 	}
+	// create VS with empty pool
+	appProfileType, sslEnabled := getAppProfileType(tasks)
+	vs := &VS{
+		name:           vsName,
+		poolName:       poolName,
+		appProfileType: appProfileType,
+		sslEnabled:     sslEnabled,
+		fqdn:           fqdn,
+		jobsChan:       make(chan (vsJob), 5),
+	}
+	return vs
 }
 
 // checks if pool exists: returns the pool, else some error
@@ -462,23 +469,18 @@ func (lb *AviLoadBalancer) Create(vs *VS, tasks dockerTasks) error {
 	    }
 	}`
 
-	fqdn := vs.name
-	if lb.cfg.AviDNSSubdomain != "" {
-		fqdn = fqdn + "." + lb.cfg.AviDNSSubdomain
-	}
-
 	//TODO: when supporting ssl termination; fix following which is
 	// mocked above
 	sslCertRef := sslCert["url"]
 	if vs.sslEnabled {
 		jsonstr = fmt.Sprintf(jsonstr,
 			lb.cfg.AviCloudName,
-			appProfile["url"], vs.name, fqdn,
+			appProfile["url"], vs.name, vs.fqdn,
 			nwRefUrl, pool["url"], sslCertRef, "443", "true")
 	} else {
 		jsonstr = fmt.Sprintf(jsonstr,
 			lb.cfg.AviCloudName,
-			appProfile["url"], vs.name, fqdn,
+			appProfile["url"], vs.name, vs.fqdn,
 			nwRefUrl, pool["url"], "80", "false")
 	}
 

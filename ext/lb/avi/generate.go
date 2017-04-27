@@ -43,7 +43,7 @@ func (lb *AviLoadBalancer) GenerateProxyConfig(containers []types.Container) (in
 	mutex.Unlock()
 
 	// converge to current configuration
-	go lb.Converge(cc)
+	lb.Converge(cc)
 
 	return nil, nil
 }
