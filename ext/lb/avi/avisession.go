@@ -8,7 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/http/httputil"
+	// "net/http/httputil"
 	"reflect"
 )
 
@@ -178,9 +178,9 @@ func (avi *AviSession) rest_request(verb string, uri string, payload interface{}
 		req.AddCookie(&http.Cookie{Name: "sessionid", Value: avi.sessionid})
 	}
 
-	dump, err := httputil.DumpRequestOut(req, true)
 	log().Debug("Request headers: ", req.Header)
-	debug(dump, err)
+	// dump, err := httputil.DumpRequestOut(req, true)
+	// debug(dump, err)
 	client := &http.Client{Transport: tr}
 
 	resp, err := client.Do(req)
