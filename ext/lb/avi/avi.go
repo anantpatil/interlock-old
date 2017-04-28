@@ -263,25 +263,3 @@ func (lb *AviLoadBalancer) NeedsReload() bool {
 func (lb *AviLoadBalancer) Reload(proxyContainers []types.Container) error {
 	return nil
 }
-
-func (lb *AviLoadBalancer) Converge(cc *currentConfig) {
-	for serviceName, added := range cc.services {
-		if added {
-			tasksAdded := cc.tasksAdded[serviceName]
-			delete(cc.tasksAdded, serviceName)
-			lb.addService(serviceName, tasksAdded)
-		} else {
-			// tasksDeleted := cc.tasksDeleted[serviceName]
-			delete(cc.tasksDeleted, serviceName)
-			lb.deleteService(serviceName)
-		}
-	}
-
-	for serviceName, tasks := range cc.tasksAdded {
-		go lb.addTasks(serviceName, tasks)
-	}
-
-	for serviceName, tasks := range cc.tasksDeleted {
-		go lb.deleteTasks(serviceName, tasks)
-	}
-}
