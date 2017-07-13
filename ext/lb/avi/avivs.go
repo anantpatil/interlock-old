@@ -83,7 +83,7 @@ var vsJson = `{
          "application_profile_ref":"%s",
 	 "auto_allocate_ip": true,
          "name":"%s",
-         "fqdn": "%s",
+	 "dns_info": [{"fqdn": "%s"}],
 	 "network_ref": "%s",
          "pool_ref":"%s",`
 
